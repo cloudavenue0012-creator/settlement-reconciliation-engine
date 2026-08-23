@@ -2,3 +2,4 @@ faker>=24
 pyyaml>=6
 pandas>=2
 matplotlib>=3.7
+streamlit>=1.30

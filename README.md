@@ -59,7 +59,14 @@ python reconcile.py               # -> data/reconciliation.csv
 python eval.py                    # -> metrics report
 python tune.py                    # -> docs/tuning_curve.png + recommended tolerance
 python explain.py --demo-hallucination   # grounded explanations + faithfulness eval
+streamlit run app.py              # interactive dashboard
 ```
+
+## Interactive demo
+
+`streamlit run app.py` — regenerate synthetic settlements and reconcile them live.
+Slide the **match tolerance** and watch precision/recall move in real time; the
+flagged-anomaly table carries a grounded explanation and a faithfulness score per row.
 
 ## Tolerance tuning
 
