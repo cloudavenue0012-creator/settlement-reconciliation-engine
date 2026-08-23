@@ -28,14 +28,8 @@ def reconstruct_expected(orders: pd.DataFrame, rules) -> pd.DataFrame:
     return out
 
 
-def reconcile(orders_path: Path, official_path: Path, rules_path: Path,
-              tol_override: int | None = None) -> pd.DataFrame:
-    rules, tol = load_rules(rules_path)
-    if tol_override is not None:
-        tol = tol_override
-    orders = pd.read_csv(orders_path)
-    official = pd.read_csv(official_path)
-
+def reconcile_frames(orders: pd.DataFrame, official: pd.DataFrame, rules, tol: int) -> pd.DataFrame:
+    """Core reconciliation over in-memory frames (used by CLI and the Streamlit app)."""
     expected = reconstruct_expected(orders, rules)
 
     # collapse duplicates but remember the count so we can flag double-counting
@@ -70,6 +64,17 @@ def reconcile(orders_path: Path, official_path: Path, rules_path: Path,
     df["flag"] = df.apply(classify, axis=1)
     df["is_anomaly"] = df["flag"] != "ok"
     return df
+
+
+def reconcile(orders_path: Path, official_path: Path, rules_path: Path,
+              tol_override: int | None = None) -> pd.DataFrame:
+    """Path-based wrapper: load orders/official/rules, then reconcile."""
+    rules, tol = load_rules(rules_path)
+    if tol_override is not None:
+        tol = tol_override
+    orders = pd.read_csv(orders_path)
+    official = pd.read_csv(official_path)
+    return reconcile_frames(orders, official, rules, tol)
 
 
 def main():

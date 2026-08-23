@@ -1,5 +1,10 @@
 # Settlement Reconciliation & Verification Engine
 
+[![CI](https://github.com/cloudavenue0012-creator/settlement-reconciliation-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudavenue0012-creator/settlement-reconciliation-engine/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Made with Streamlit](https://img.shields.io/badge/demo-Streamlit-ff4b4b.svg)
+
 Recompute-and-diff verification for **multi-channel sales settlements**. The engine
 never trusts the number a channel reports — it reconstructs the *expected* payout
 for every order from first principles (order value + channel fee/discount rules),
@@ -11,6 +16,11 @@ and unexplained amount errors.
 > randomly generated / illustrative (see `synth_data.py`, `rules.yaml`). No real
 > company data, code, schemas, or figures are included. This repo is a portable
 > re-implementation of a production pattern, built to be inspected.
+
+![demo](docs/demo.gif)
+
+*Slide the match tolerance and watch precision / recall trade off in real time.*
+`streamlit run app.py`, or [deploy your own](#interactive-demo) on Streamlit Community Cloud.
 
 ## Why this exists
 
@@ -67,6 +77,17 @@ streamlit run app.py              # interactive dashboard
 `streamlit run app.py` — regenerate synthetic settlements and reconcile them live.
 Slide the **match tolerance** and watch precision/recall move in real time; the
 flagged-anomaly table carries a grounded explanation and a faithfulness score per row.
+Data is generated in-process (no shelling out, no disk), so it deploys cleanly.
+
+**Deploy your own:** push to GitHub, then on [share.streamlit.io](https://share.streamlit.io)
+pick this repo → branch `main` → `app.py`. (Runtime pinned via `requirements.txt`.)
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the full pipeline on every push and **fails the build if
+quality regresses** — `eval.py --min-f1 0.80 --min-recall 0.90` — then checks that the
+explanation layer's faithfulness scorer still catches a hallucinated figure. Eval is a
+gate, not an afterthought.
 
 ## Tolerance tuning
 

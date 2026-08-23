@@ -28,6 +28,8 @@ def prf(tp: int, fp: int, fn: int):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", type=Path, default=Path("data"))
+    ap.add_argument("--min-f1", type=float, default=None, help="fail (exit 1) if F1 below this")
+    ap.add_argument("--min-recall", type=float, default=None, help="fail (exit 1) if recall below this")
     a = ap.parse_args()
     here = Path(__file__).parent
 
@@ -68,6 +70,16 @@ def main():
         rec = sub.is_anomaly.mean() if len(sub) else float("nan")
         print(f"   {kind:16s} {rec:6.1%}  (n={len(sub)})")
     print("=" * 52)
+
+    # CI gate: fail the build if quality regresses below thresholds
+    failures = []
+    if a.min_f1 is not None and f < a.min_f1:
+        failures.append(f"F1 {f:.3f} < {a.min_f1}")
+    if a.min_recall is not None and r < a.min_recall:
+        failures.append(f"recall {r:.3f} < {a.min_recall}")
+    if failures:
+        print("FAIL: " + "; ".join(failures))
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

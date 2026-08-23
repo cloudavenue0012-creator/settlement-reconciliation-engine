@@ -117,6 +117,21 @@ def build_official(orders: pd.DataFrame, rules, anomaly_rate: float, tol: int):
     return pd.DataFrame(official), pd.DataFrame(truth)
 
 
+def generate(n: int, anomaly_rate: float, seed: int):
+    """Build the three synthetic frames in-process (no file I/O).
+
+    Returns (orders, official, ground_truth) DataFrames. Used directly by the
+    Streamlit app so a cloud deploy never shells out or touches disk.
+    """
+    random.seed(seed)
+    fake = Faker("ko_KR")
+    fake.seed_instance(seed)
+    rules, tol = load_rules(Path(__file__).with_name("rules.yaml"))
+    orders = gen_orders(n, rules, fake)
+    official, truth = build_official(orders, rules, anomaly_rate, tol)
+    return orders, official, truth
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=2000, help="number of orders")
@@ -125,14 +140,7 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("data"))
     a = ap.parse_args()
 
-    random.seed(a.seed)
-    fake = Faker("ko_KR")
-    fake.seed_instance(a.seed)
-
-    rules, tol = load_rules(Path(__file__).with_name("rules.yaml"))
-    orders = gen_orders(a.n, rules, fake)
-    official, truth = build_official(orders, rules, a.anomaly_rate, tol)
-
+    orders, official, truth = generate(a.n, a.anomaly_rate, a.seed)
     a.out.mkdir(parents=True, exist_ok=True)
     orders.to_csv(a.out / "orders.csv", index=False, encoding="utf-8-sig")
     official.to_csv(a.out / "official_settlement.csv", index=False, encoding="utf-8-sig")
