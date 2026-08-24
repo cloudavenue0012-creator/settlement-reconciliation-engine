@@ -114,9 +114,23 @@ the output — the same guard keeps an LLM rephrasing layer honest.
 
 ## Roadmap
 
-- **Streamlit dashboard** — interactive reconciliation view + drill-down, live demo.
 - **LLM rephrase backend** — swap the template explainer for a model call, gated by the existing faithfulness eval.
-- **CI** — run the pipeline + assert eval thresholds on every commit.
+- **Config-driven rules** — load channel rules from a live source instead of a static YAML.
+- **Streaming reconciliation** — reconcile settlements as they arrive rather than in batch.
+
+## 한국어 요약
+
+**다채널 매출 정산 대사·검증 엔진.** 배달앱·제휴·직영 등 여러 채널이 통보한 정산 금액을 그대로
+신뢰하지 않고, 주문·수수료·할인부담 규칙으로 **기대 정산액을 독립적으로 재계산(recompute)** 한 뒤
+채널의 공식 정산과 **대조(diff)** 해 오차를 잡아내는 "검증 게이트" 파이프라인입니다.
+
+- **잡아내는 이상 유형** — 수수료 오류(`fee_error`)·할인부담 오류(`burden_error`)·정산 누락(`missing`)·중복 정산(`duplicate`)·설명 안 되는 금액 차이(`amount_mismatch`)
+- **허용오차(tolerance) 튜닝** — 임계값을 스윕해 정밀도(precision)·재현율(recall)·F1의 트레이드오프에서 운영점을 *선택*합니다 (`tune.py`, `docs/tuning_curve.png`).
+- **설명 + faithfulness 평가** — 각 이상 건에 근거 기반 자연어 설명을 붙이고, 설명이 인용한 모든 숫자가 대사 레코드로 추적되는지 점수화해 환각(없는 숫자 지어내기)을 잡습니다 (`explain.py`).
+- **CI 게이트** — 매 push마다 파이프라인을 돌려 품질(F1·recall)이 임계 아래로 떨어지면 빌드를 실패시킵니다.
+
+> 실제 운영 중인 사내 정산 재현·검증 시스템을 **회사 데이터 없이 합성 데이터로 동형 재현**한 것입니다.
+> 실제 채널명·부담율·금액·스키마는 일절 포함하지 않습니다.
 
 ## License
 
