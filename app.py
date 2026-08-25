@@ -39,7 +39,7 @@ with st.sidebar:
     rate = st.slider("Anomaly rate", 0.02, 0.20, 0.08, 0.01)
     seed = int(st.number_input("Seed", 0, 9999, 42))
     st.header("Verification gate")
-    tol = st.slider("Match tolerance (KRW)", 10, 500, 50, 10,
+    tol = st.slider("Match tolerance (KRW)", 10, 800, 400, 10,
                     help="Below this, |official - expected| is rounding noise, not an anomaly.")
 
 orders, official, truth = make_data(n, rate, seed)

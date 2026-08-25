@@ -41,24 +41,23 @@ official_settlement.csv ──────────────────�
 ```
 
 - **`settlement_rules.py`** — the canonical payout formula (`gross − commission − merchant_discount_burden`), shared by generator and reconciler so neither can drift.
-- **`synth_data.py`** — generates orders + an official settlement file with *planted* discrepancies and a ground-truth label file. Noise is mostly sub-tolerance, with a heavy tail so detection faces a real precision/recall trade-off.
+- **`synth_data.py`** — generates orders + an official settlement file with *planted* discrepancies and a ground-truth label file. Noise is mostly small, with a heavy tail that **deliberately overlaps** the small end of the planted errors, so no threshold can separate them cleanly.
 - **`reconcile.py`** — the engine: reconstructs expected payout, matches, classifies each anomaly type.
 - **`eval.py`** — scores the engine against ground truth (the differentiator).
 
-## Results (one synthetic run, 2,000 orders, ~8% planted anomalies)
+## Results (2,000 orders, ~8% planted anomalies, `--seed 42`, tolerance 400)
 
 | metric | value |
 |---|---|
-| reconciliation accuracy (clean within tolerance) | 97.7% |
+| reconciliation accuracy (clean within tolerance) | 99.2% |
 | anomaly recall | 100.0% |
-| anomaly precision | 78.5% |
-| F1 | 0.879 |
-| false-positive rate | 2.3% |
-| payout gap recovered | 1.60M / 1.62M KRW (synthetic) |
+| anomaly precision | 91.5% |
+| F1 | 0.956 |
+| false-positive rate | 0.8% |
+| payout gap recovered | 1,771,085 / 1,795,556 KRW (98.6%, synthetic) |
+| per-type recall | 100% on all five discrepancy types |
 
-Recall is perfect but precision is capped by rounding-noise false positives — which
-is exactly the signal that the fixed tolerance should be *tuned*, not guessed
-(see Roadmap). Numbers vary by `--seed`.
+Reproduce with the Run block below; CI asserts these on every push. Numbers vary by `--seed`.
 
 ## Run
 
@@ -67,7 +66,7 @@ pip install -r requirements.txt
 python synth_data.py -n 2000      # -> data/orders.csv, official_settlement.csv, ground_truth.csv
 python reconcile.py               # -> data/reconciliation.csv
 python eval.py                    # -> metrics report
-python tune.py                    # -> docs/tuning_curve.png + recommended tolerance
+python tune.py                    # -> docs/tuning_curve.png + both operating points
 python explain.py --demo-hallucination   # grounded explanations + faithfulness eval
 streamlit run app.py              # interactive dashboard
 ```
@@ -85,22 +84,64 @@ pick this repo → branch `main` → `app.py`. (Runtime pinned via `requirements
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs the full pipeline on every push and **fails the build if
-quality regresses** — `eval.py --min-f1 0.80 --min-recall 0.90` — then checks that the
+quality regresses** — `eval.py --min-f1 0.93 --min-recall 0.99` — then checks that the
 explanation layer's faithfulness scorer still catches a hallucinated figure. Eval is a
 gate, not an afterthought.
 
-## Tolerance tuning
+The thresholds sit just under the shipped numbers on purpose. An earlier version gated at
+`--min-f1 0.80 --min-recall 0.90`, which the generator flaw described below made
+effectively unfailable — a green badge asserting quality on a benchmark that could not
+go red.
 
-The fixed tolerance is a knob, not a guess. `tune.py` sweeps it and scores anomaly
-detection at each level, so the operating point is *chosen* from the trade-off:
+## Choosing the tolerance
+
+The match tolerance is the only free parameter in the engine: below it a gap is
+rounding noise, above it an anomaly. `tune.py` scores every value against ground truth
+so the number is an argued choice, not a default nobody revisited.
 
 ![tuning curve](docs/tuning_curve.png)
 
-Low tolerance flags rounding noise (precision collapses); high tolerance lets small
-real errors through (recall decays). Peak F1 here is **~0.97 at ~150 KRW** — and it
-does *not* reach 1.0, because ~30% of amount errors are deliberately placed in the
-gray zone near tolerance. No single threshold catches everything; the curve is how
-you pick the least-bad one.
+```
+ tol(KRW)    prec  recall      F1   FP   FN
+      100   80.7%  100.0%   0.893   36    0
+      200   84.4%  100.0%   0.915   28    0
+      400   91.5%  100.0%   0.956   14    0   <- shipped
+      410   93.2%  100.0%   0.965   11    0   <- widest tolerance with full recall
+      500   96.1%   98.7%   0.974    6    2
+      600  100.0%   98.0%   0.990    0    3   <- max F1
+      800  100.0%   94.7%   0.973    0    8
+```
+
+**F1 peaks at 600, and that is the wrong operating point.** Getting there means missing
+3 real discrepancies to avoid 14 reviews. In settlement work a false negative is cash
+permanently lost; a false positive costs someone a minute. So the engine ships at
+max-recall rather than max-F1 — optimising F1 here would trade money for tidiness.
+
+Full recall survives up to 410. The engine ships **400**, one step inside that boundary,
+so a small change in the fee rules or the noise profile does not silently push the
+operating point across into missed anomalies.
+
+### The benchmark was rigged, and fixing it was the real finding
+
+An earlier version of this repo reported **F1 0.879 at tolerance 50**, and the sweep made
+it look like tuning to ~150 achieved a near-perfect F1. That result was an artifact. The
+generator drew its heavy-tail noise as `randint(tol + 10, tol * 3)` — **the noise
+distribution depended on the very tolerance being evaluated.** Measured on the old
+generator:
+
+- every false positive sat inside `[tol + 10, tol * 3]`, and no clean row ever exceeded `tol * 3`
+- so precision snapped to *exactly* 1.000 the moment the tolerance passed that manufactured band
+- regenerating the data at tolerance 50 / 200 / 400 moved precision only 78.5% / 78.6% / 78.1%
+
+A benchmark whose difficulty tracks the parameter being tuned measures the generator, not
+the detector — and the knob it advertises as tunable provably cannot move precision. The
+fix was to make noise an absolute range (60–600 KRW) that overlaps the small planted
+errors (30–15,000 KRW), so some noise is indistinguishable from a real discrepancy at
+*any* threshold. That is what puts a genuine knee in the curve above instead of a plateau
+at 1.000.
+
+The honest metrics are the ones in Results, and the CI gate had to be raised to stay
+meaningful. That is the point.
 
 ## Explanation layer + faithfulness eval
 
@@ -114,6 +155,7 @@ the output — the same guard keeps an LLM rephrasing layer honest.
 
 ## Roadmap
 
+- **Overlap-severity sweep** — the noise/error overlap band is currently one hand-set range; parameterise it and show how detectability degrades as the two distributions converge.
 - **LLM rephrase backend** — swap the template explainer for a model call, gated by the existing faithfulness eval.
 - **Config-driven rules** — load channel rules from a live source instead of a static YAML.
 - **Streaming reconciliation** — reconcile settlements as they arrive rather than in batch.
@@ -128,6 +170,9 @@ the output — the same guard keeps an LLM rephrasing layer honest.
 - **허용오차(tolerance) 튜닝** — 임계값을 스윕해 정밀도(precision)·재현율(recall)·F1의 트레이드오프에서 운영점을 *선택*합니다 (`tune.py`, `docs/tuning_curve.png`).
 - **설명 + faithfulness 평가** — 각 이상 건에 근거 기반 자연어 설명을 붙이고, 설명이 인용한 모든 숫자가 대사 레코드로 추적되는지 점수화해 환각(없는 숫자 지어내기)을 잡습니다 (`explain.py`).
 - **CI 게이트** — 매 push마다 파이프라인을 돌려 품질(F1·recall)이 임계 아래로 떨어지면 빌드를 실패시킵니다.
+- **벤치마크 결함 자체 발견·수정** — 초기 버전은 노이즈를 평가 대상인 허용오차에 종속시켜 생성해, 어떤 임계값을
+  써도 정밀도가 오르는 구조였습니다. 이를 실측으로 확인해 절대범위 노이즈로 교체했고, 그 경위와 수치 변화를
+  README에 그대로 남겼습니다.
 
 > 실제 운영 중인 사내 정산 재현·검증 시스템을 **회사 데이터 없이 합성 데이터로 동형 재현**한 것입니다.
 > 실제 채널명·부담율·금액·스키마는 일절 포함하지 않습니다.

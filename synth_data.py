@@ -66,13 +66,30 @@ def gen_orders(n: int, rules, fake: Faker) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_official(orders: pd.DataFrame, rules, anomaly_rate: float, tol: int):
+NOISE_ORDINARY = 20          # ordinary rounding drift, |KRW|
+NOISE_TAIL_LO, NOISE_TAIL_HI = 60, 600   # heavy tail — deliberately overlaps the anomaly range
+NOISE_TAIL_RATE = 0.02
+
+
+def build_official(orders: pd.DataFrame, rules, anomaly_rate: float):
     """Return (official_settlement_df, ground_truth_df).
 
     'official' starts as the correct expected payout, then we inject realistic
-    noise and planted anomalies. Noise is *mostly* sub-tolerance, but ~2% of rows
-    drift past tolerance (heavy tail) and some amount errors are tiny -- so the
-    detector faces a genuine precision/recall trade-off, not a rigged 100%.
+    noise and planted anomalies.
+
+    The noise distribution is deliberately **independent of the match tolerance**.
+    An earlier version drew the heavy tail as `randint(tol + 10, tol * 3)`, which
+    quietly rigged the benchmark: raising the tolerance swallowed the entire tail,
+    so the sweep reported a perfect F1 of 1.000 at tol>=160 — measuring the
+    generator's dependence on tol, not the detector's skill. Clean noise topped out
+    at 150 KRW while planted anomalies started well above it: fully separated, so any
+    threshold in between looked flawless.
+
+    Now the tail is an absolute range (60-600 KRW) that **overlaps** the small end
+    of the planted amount errors (30-15,000 KRW). Some noise is therefore
+    indistinguishable from a real discrepancy at any threshold, which is the point:
+    the precision/recall trade-off is real and the tolerance has to be chosen
+    rather than assumed away.
     """
     official, truth = [], []
     for o in orders.to_dict("records"):
@@ -81,10 +98,10 @@ def build_official(orders: pd.DataFrame, rules, anomaly_rate: float, tol: int):
         eff_discount = 0 if o["platform_funded"] else o["discount_amount"]
         correct = expected_payout(o["gross_amount"], eff_discount, rule)
 
-        if random.random() < 0.02:                    # heavy-tailed rounding -> some false positives
-            payout = correct + random.choice([-1, 1]) * random.randint(tol + 10, tol * 3)
+        if random.random() < NOISE_TAIL_RATE:         # heavy tail — overlaps real anomalies
+            payout = correct + random.choice([-1, 1]) * random.randint(NOISE_TAIL_LO, NOISE_TAIL_HI)
         else:
-            payout = correct + random.randint(-20, 20)  # ordinary sub-tolerance noise
+            payout = correct + random.randint(-NOISE_ORDINARY, NOISE_ORDINARY)
         label, present, dup = "ok", True, False
 
         if random.random() < anomaly_rate:
@@ -99,10 +116,8 @@ def build_official(orders: pd.DataFrame, rules, anomaly_rate: float, tol: int):
                 if not o["platform_funded"]:      # only a real error when it *was* platform-funded
                     payout = correct - random.randint(1_500, 6_000)
             elif kind == ANOM_AMOUNT:
-                # both directions; ~30% land in the gray zone near tolerance, so no single
-                # threshold catches everything -> the tuning curve peaks below F1=1.0
-                mag = random.randint(30, 400) if random.random() < 0.30 else random.randint(400, 15_000)
-                payout = correct + random.choice([-1, 1]) * mag
+                # both directions, and sometimes tiny (near tolerance) -> some false negatives
+                payout = correct + random.choice([-1, 1]) * random.randint(30, 15_000)
             elif kind == ANOM_MISSING:
                 present = False
             elif kind == ANOM_DUP:
@@ -126,9 +141,9 @@ def generate(n: int, anomaly_rate: float, seed: int):
     random.seed(seed)
     fake = Faker("ko_KR")
     fake.seed_instance(seed)
-    rules, tol = load_rules(Path(__file__).with_name("rules.yaml"))
+    rules, _ = load_rules(Path(__file__).with_name("rules.yaml"))
     orders = gen_orders(n, rules, fake)
-    official, truth = build_official(orders, rules, anomaly_rate, tol)
+    official, truth = build_official(orders, rules, anomaly_rate)
     return orders, official, truth
 
 

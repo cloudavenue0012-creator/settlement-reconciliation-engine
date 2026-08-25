@@ -21,8 +21,8 @@ jobs:
       - name: Reconcile
         run: python reconcile.py
 
-      - name: Eval — gate on quality (F1 >= 0.80, recall >= 0.90)
-        run: python eval.py --min-f1 0.80 --min-recall 0.90
+      - name: Eval — gate on quality (F1 >= 0.93, recall >= 0.99)
+        run: python eval.py --min-f1 0.93 --min-recall 0.99
 
       - name: Explanation faithfulness (catches hallucinated figures)
         run: python explain.py --demo-hallucination

@@ -1,5 +1,13 @@
 # Synthetic channel settlement rules. Values are illustrative, not from any real system.
-tolerance_krw: 50            # |official - expected| below this = rounding noise, not an anomaly
+# |official - expected| below this = rounding noise, not an anomaly.
+# 400 is *chosen*, not guessed. `python tune.py` sweeps this parameter: the widest
+# tolerance that still catches every planted anomaly is 410, and F1 peaks higher at
+# 600. We ship 400 — one step inside the full-recall boundary, so a small shift in
+# the noise profile does not silently push us into missed anomalies.
+# Not 600: in settlement work a false negative is cash permanently lost while a false
+# positive costs one review, so recall wins over F1.
+# Re-run the sweep if the fee rules or the noise profile change.
+tolerance_krw: 400
 
 channels:
   channel_A:        { commission_rate: 0.12, merchant_burden: 0.50, settlement_lag_days: 7 }

@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 .env
+
+# 로컬 터널·실행 로그 (공인 IP·LAN IP 포함 — 절대 커밋 금지)
+*.log
