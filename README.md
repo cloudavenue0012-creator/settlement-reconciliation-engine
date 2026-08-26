@@ -59,14 +59,20 @@ official_settlement.csv ──────────────────�
 
 Reproduce with the Run block below; CI asserts these on every push. Numbers vary by `--seed`.
 
+![run overview dashboard](docs/dashboard.png)
+
+*One-glance run overview (`python dashboard.py`): flag mix, detection scoreboard, the tolerance trade-off, and the share of the KRW payout gap the engine flags.*
+
 ## Run
 
 ```bash
 pip install -r requirements.txt
+pytest -q                         # unit tests: every anomaly class + generator determinism + recall floor
 python synth_data.py -n 2000      # -> data/orders.csv, official_settlement.csv, ground_truth.csv
 python reconcile.py               # -> data/reconciliation.csv
 python eval.py                    # -> metrics report
 python tune.py                    # -> docs/tuning_curve.png + both operating points
+python dashboard.py               # -> docs/dashboard.png (static run overview)
 python explain.py --demo-hallucination   # grounded explanations + faithfulness eval
 streamlit run app.py              # interactive dashboard
 ```
@@ -83,10 +89,11 @@ pick this repo → branch `main` → `app.py`. (Runtime pinned via `requirements
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the full pipeline on every push and **fails the build if
-quality regresses** — `eval.py --min-f1 0.93 --min-recall 0.99` — then checks that the
-explanation layer's faithfulness scorer still catches a hallucinated figure. Eval is a
-gate, not an afterthought.
+`.github/workflows/ci.yml` runs the **unit tests** (`pytest` — every anomaly class, generator
+determinism, and an end-to-end recall floor) and then the full pipeline on every push,
+**failing the build if quality regresses** — `eval.py --min-f1 0.93 --min-recall 0.99` — then
+checks that the explanation layer's faithfulness scorer still catches a hallucinated figure.
+Eval is a gate, not an afterthought.
 
 The thresholds sit just under the shipped numbers on purpose. An earlier version gated at
 `--min-f1 0.80 --min-recall 0.90`, which the generator flaw described below made

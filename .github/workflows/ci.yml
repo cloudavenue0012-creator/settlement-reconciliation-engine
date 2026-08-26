@@ -15,6 +15,9 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
 
+      - name: Unit tests
+        run: pytest -q
+
       - name: Generate synthetic data
         run: python synth_data.py -n 2000 --seed 42
 
