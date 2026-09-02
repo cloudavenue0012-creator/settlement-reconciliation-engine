@@ -100,6 +100,36 @@ The thresholds sit just under the shipped numbers on purpose. An earlier version
 effectively unfailable — a green badge asserting quality on a benchmark that could not
 go red.
 
+## The benchmark was rigged, and finding that was the real result
+
+An earlier version of `synth_data.py` drew its heavy-tail noise as
+`randint(tol + 10, tol * 3)` — where `tol` is the match tolerance the evaluation
+is meant to *judge*. The difficulty of the benchmark therefore moved with the
+parameter under test, and every tolerance scored about the same.
+
+`rigged_benchmark_demo.py` reproduces both generators side by side. The tell is
+the false-positive rate, not F1:
+
+| tolerance | FPR (rigged) | FPR (fixed) |
+|---:|---:|---:|
+| 50 | 0.0208 | 0.0195 |
+| 200 | 0.0208 | 0.0125 |
+| 800 | 0.0208 | 0.0000 |
+
+Widening the band 50 → 800 removes **0%** of the false positives under the rigged
+generator and **100%** under the fixed one. A tolerance that swallows no extra
+noise as it widens is not being measured at all.
+
+The general form: **if the data generator reads the parameter you are evaluating,
+your benchmark cannot rank settings of that parameter.** Sweep the parameter and
+look at the shape — a sound benchmark trades precision against recall, a rigged
+one is flat. (F1 spread is *not* a reliable tell here; both generators produce a
+similar spread. That was measured, not assumed.)
+
+```
+python rigged_benchmark_demo.py   # no args, no network, synthetic data only
+```
+
 ## Choosing the tolerance
 
 The match tolerance is the only free parameter in the engine: below it a gap is
