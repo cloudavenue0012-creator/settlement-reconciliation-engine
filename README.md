@@ -44,6 +44,9 @@ official_settlement.csv ──────────────────�
 - **`synth_data.py`** — generates orders + an official settlement file with *planted* discrepancies and a ground-truth label file. Noise is mostly small, with a heavy tail that **deliberately overlaps** the small end of the planted errors, so no threshold can separate them cleanly.
 - **`reconcile.py`** — the engine: reconstructs expected payout, matches, classifies each anomaly type.
 - **`eval.py`** — scores the engine against ground truth (the differentiator).
+- **`ruleset.py`** — the same payout formula as a *versioned* value (`RuleSet` + scoped `Override`s), vectorised; version A reproduces the engine above row for row (pinned by a test).
+- **`rule_change_gate.py`** / **`eval_rule_change.py`** — before/after regression gate for rule changes ([below](#rule-change-regression-gate-did-only-the-intended-rows-change)).
+- **`three_way.py`** / **`eval_three_way.py`** — ledger vs recompute vs channel, to say *where* an error is ([below](#three-way-reconciliation-where-is-the-error)).
 
 ## Results (2,000 orders, ~8% planted anomalies, `--seed 42`, tolerance 400)
 
@@ -67,13 +70,17 @@ Reproduce with the Run block below; CI asserts these on every push. Numbers vary
 
 ```bash
 pip install -r requirements.txt
-pytest -q                         # unit tests: every anomaly class + generator determinism + recall floor
+pytest -q                         # unit tests: anomaly classes, rule-change gate, three-way vote, recall floors
 python synth_data.py -n 2000      # -> data/orders.csv, official_settlement.csv, ground_truth.csv
 python reconcile.py               # -> data/reconciliation.csv
 python eval.py                    # -> metrics report
 python tune.py                    # -> docs/tuning_curve.png + both operating points
 python dashboard.py               # -> docs/dashboard.png (static run overview)
 python explain.py --demo-hallucination   # grounded explanations + faithfulness eval
+python rule_change_gate.py        # three named rule-change scenarios, gate verdict per row
+python eval_rule_change.py        # side-effect detection over 450 synthetic rule changes
+python three_way.py               # one month, ledger vs recompute vs channel, confusion matrix
+python eval_three_way.py          # error-location accuracy over 20 synthetic months
 streamlit run app.py              # interactive dashboard
 ```
 
@@ -93,6 +100,9 @@ pick this repo → branch `main` → `app.py`. (Runtime pinned via `requirements
 determinism, and an end-to-end recall floor) and then the full pipeline on every push,
 **failing the build if quality regresses** — `eval.py --min-f1 0.93 --min-recall 0.99` — then
 checks that the explanation layer's faithfulness scorer still catches a hallucinated figure.
+It then gates the two later additions: the rule-change gate's three named scenarios must
+give their expected verdicts, `eval_rule_change.py --min-detect 0.90 --max-false-alarm 0.0`,
+and `eval_three_way.py --min-location-acc 0.96 --max-false-alarm 0.01 --min-cell-id 1.0`.
 Eval is a gate, not an afterthought.
 
 The thresholds sit just under the shipped numbers on purpose. An earlier version gated at
@@ -190,6 +200,145 @@ counted as ungrounded. `--demo-hallucination` injects a fake total to show the
 scorer actually catches it (faithfulness drops below 1.0) rather than rubber-stamping
 the output — the same guard keeps an LLM rephrasing layer honest.
 
+## Rule-change regression gate: did only the intended rows change?
+
+**Problem.** Reconciliation checks the channel's number against the engine. But the engine
+changes too — a channel raises its commission from the 16th, a promo's funding split is
+renegotiated — and after each edit the month is re-run. Eyeballing the new total does not
+answer the real question: *did exactly the rows I meant to change, change, by exactly the
+amount I meant, and did nothing else move?* A copy-paste into the wrong channel block, or
+an effective date that got dropped, produces numbers that look perfectly plausible.
+
+**Design.** `rule_change_gate.py` runs three versions of the engine over the same orders:
+`before` (rule version A), `after` (version B as actually implemented), and `predicted` —
+A plus only the *declared* change, a one-line `ChangeSpec` written separately from the
+code (`channel_B commission 0.14 -> 0.15 from 2026-01-16`). Every row gets a status:
+
+| status | before → after | meaning |
+|---|---|---|
+| `unchanged` | same | nothing was meant to change, nothing did |
+| `explained` | moved, = predicted | the intended change, landed |
+| `side_effect` | moved, not declared | **fails the gate** |
+| `wrong_magnitude` | moved, ≠ predicted | **fails the gate** |
+| `missed` | not moved, but declared | **fails the gate** |
+
+Unexplained rows are grouped by channel × scheme, which usually points straight at the
+bug. Two choices carry the weight:
+
+- **Tolerance 0.** The reconciler needs a 400 KRW band because it compares two
+  independent systems. Before/after compares one deterministic engine with itself — there
+  is no noise for a band to absorb, only real changes for it to hide.
+- **A probe grid, not just the month.** The gate can only see branches the month's orders
+  exercise. So it also runs one synthetic order per channel × scheme × order-value level
+  (12,000 / 33,333 / 50,000 / 89,500) × date edge (month start/end, both sides of each
+  declared effective date).
+
+The three named scenarios (`python rule_change_gate.py`, 2,000 orders):
+
+| scenario | verdict | explained rows | unexplained rows | KRW not covered by the declared change |
+|---|---|---:|---:|---:|
+| intended change only | PASS | 266 + 40 probe | 0 | 0 |
+| intended change + copy-paste into `channel_A`'s burden | FAIL | 266 + 40 probe | 297 + 48 probe | 418,806 |
+| scope too wide (effective date ignored) | FAIL | 266 + 40 probe | 238 + 40 probe | 137,415 |
+
+**Measured** (`python eval_rule_change.py`: 50 scenarios per kind × 9 kinds, 400 orders a
+month, a random intended change each time; share of scenarios each check fails):
+
+| planted defect | gate | gate+probe | +probe tol=1 | +probe tol=400 | totals | scope-only |
+|---|---:|---:|---:|---:|---:|---:|
+| none (false alarm) | 0% | **0%** | 0% | 0% | 0% | 0% |
+| side effect on another channel | 100% | 100% | 100% | 100% | 100% | 0% |
+| rounding refactor (half-even → floor) | 0% | 100% | 0% | 0% | 0% | 0% |
+| scope too wide: all channels | 100% | 100% | 100% | 100% | 98% | 0% |
+| scope too wide: whole month | 100% | 100% | 100% | 100% | 70% | 0% |
+| wrong magnitude (1.5× the declared delta) | 100% | 100% | 100% | 100% | 40% | 100% |
+| too narrow (one scheme only) | 100% | 100% | 100% | 100% | 70% | 100% |
+| rare branch (gross ≥ 88,000 × platform promo × one channel) | 48% | 100% | 100% | 100% | 48% | 2% |
+| same bug, off the probe grid (70,000–70,999) | 24% | 24% | 24% | 24% | 12% | 4% |
+| **all defects** | 71.5% | **90.5%** (362/400) | 78.0% | 78.0% | 54.8% | 25.8% |
+
+`gate` = row-level, tolerance 0, the month only. `totals` = the month total moved by the
+declared amount within 0.1% of the total. `scope-only` = every row inside the declared
+scope matches the prediction. Scored per scenario (did the check fail?), never per row: a
+row-level score would compare the gate's diff with the same diff computed again.
+
+What the table says:
+
+- **The usual check — "did the month total move by about the expected amount?" — catches
+  54.8%.** Offsetting and small side effects disappear into a 0.1% materiality band.
+  Checking only the rows you meant to change catches 25.8%: it cannot see a side effect,
+  because a side effect is by definition outside the rows you were looking at.
+- **The month's own data hides two whole classes.** Every synthetic order is a round
+  500 KRW multiple, so every payout is a whole number and a rounding change moves nothing
+  in the month (0%). A branch that needs a rare order fires in only 48% of months. The
+  probe grid takes both to 100%.
+- **Any tolerance erases the rounding class.** A 1 KRW "float safety" band and the
+  borrowed 400 KRW band both fall to 78.0%. In this synthetic set the 400 KRW band cost
+  nothing beyond that, because every other planted side effect is large; the point is that
+  the band buys nothing either.
+- **The probe grid is not a proof.** The last row is the rare-branch bug moved to an
+  order-value band none of the grid's values land in: 24%, the same as the month alone.
+  That row is kept in the denominator on purpose — without it the headline would be
+  350/350, which says more about where the grid's values were put than about the gate.
+
+## Three-way reconciliation: where is the error?
+
+**Problem.** The two-way engine compares the recompute (R) with the channel (O). When they
+disagree, its only possible verdict is "the channel is off". It cannot tell a channel
+error from a bug in its own rules, and an error in the merchant's own books — a typo, a
+missed or doubled booking — is invisible to it, because the books never enter the
+comparison.
+
+**Design.** `three_way.py` adds the ledger (L): the receivable the books recorded when the
+sale happened, booked from the contract terms. Three values produced by three different
+parties give a majority vote per order (each "≈" is the same 400 KRW band as above; a
+missing row counts as 0 and a duplicated row sums):
+
+| pattern | located error |
+|---|---|
+| L ≈ R ≈ O | ok |
+| R ≈ O, L is the odd one | ledger (books) |
+| L ≈ R, O is the odd one | channel settlement |
+| L ≈ O, R is the odd one | rule engine |
+| no two agree | ambiguous — two sources wrong at once, manual review |
+
+Rule-engine errors are systematic — a wrong rule hits every order it applies to — so
+`suspect_cells` also aggregates the votes by channel × scheme: a cell where most orders
+vote "engine" is a rule to fix, not a list of orders to chase.
+
+**Measured** (`python eval_three_way.py`: 20 synthetic months × 2,000 orders, seeds 42–61;
+~3% of ledger rows and ~3% of channel rows wrong, one channel × scheme cell running a
+commission 3%p off in the engine; scored per row against the planted source):
+
+| | three-way | two-way |
+|---|---:|---:|
+| right location: ledger errors (1,118 rows) | **98.6%** | 0.0% |
+| right location: channel errors (1,088) | 99.3% | 99.3% |
+| right location: engine errors (1,827) | **96.4%** | 0.0% (called "channel") |
+| right location: two sources at once (161) | 82.6% | 0.0% |
+| **location accuracy, all error rows (4,194)** | **97.2%** | 25.8% |
+| detected at all (any location) | 98.4% | 71.8% |
+| false alarm on clean rows (35,806) | 0.67% | 0.67% |
+| engine cell named exactly | 20/20 months | n/a |
+
+The misses are mostly sub-tolerance: 47 engine rows are small orders where a 3%p rate
+error is under 400 KRW, and 11 ledger typos are smaller than the band. The false alarms are
+the channel-noise tail (60–600 KRW) — the same noise the two-way engine already pays for.
+
+**Known limit, measured rather than hidden.** The vote assumes the three sources fail
+independently. If the ledger and the engine both read the same stale contract master, they
+agree with each other and outvote the one correct source. `generate(mode="shared_master")`
+plants exactly that: **97.4% of those rows are blamed on the channel** (1,827 rows over the
+same 20 months). What still works is the cell view — the stale cell is raised as a
+systematic "channel" cluster in 20/20 months, while the same rule raises 0/20 on the main
+run where channel errors are random. A whole cell disagreeing with the channel is not what
+channel errors look like; it is the cue to check the contract itself, a fourth source no
+three-way vote can replace.
+
+Neither addition touches `synth_data.py` or its random stream: both draw from their own
+fixed-month generator (`ruleset.synth_month`), so every number in Results above is
+unchanged.
+
 ## Roadmap
 
 - **Overlap-severity sweep** — the noise/error overlap band is currently one hand-set range; parameterise it and show how detectability degrades as the two distributions converge.
@@ -207,6 +356,17 @@ the output — the same guard keeps an LLM rephrasing layer honest.
 - **허용오차(tolerance) 튜닝** — 임계값을 스윕해 정밀도(precision)·재현율(recall)·F1의 트레이드오프에서 운영점을 *선택*합니다 (`tune.py`, `docs/tuning_curve.png`).
 - **설명 + faithfulness 평가** — 각 이상 건에 근거 기반 자연어 설명을 붙이고, 설명이 인용한 모든 숫자가 대사 레코드로 추적되는지 점수화해 환각(없는 숫자 지어내기)을 잡습니다 (`explain.py`).
 - **CI 게이트** — 매 push마다 파이프라인을 돌려 품질(F1·recall)이 임계 아래로 떨어지면 빌드를 실패시킵니다.
+- **규칙 변경 회귀 게이트(전후 대조)** — 정산 규칙을 고친 뒤 같은 달을 규칙 버전 A/B 로 다시 계산해 행 단위로
+  대조하고, 바뀐 행을 «선언한 변경으로 설명되는 변화»와 «설명 안 되는 변화(부작용·범위 오류·크기 오류·미적용)»로
+  나눕니다. 설명 안 되는 행이 하나라도 있으면 실패. 허용오차는 0(같은 엔진끼리라 잡음이 없음)이고, 이번 달 데이터가
+  밟지 않는 분기를 보려고 채널×할인×금액×날짜 경계 probe 격자를 함께 돌립니다. 합성 규칙 변경 450건에서 결함
+  362/400(90.5%) 탐지·오경보 0/50 — 흔히 쓰는 «월 합계가 예상만큼 움직였나» 점검은 54.8%. 격자 밖 금액에서만
+  터지는 결함은 24%로, probe 격자가 증명이 아니라는 점도 수치로 남겼습니다.
+- **3-way 대사(장부 vs 독립 재계산 vs 채널 정산)** — 세 값의 다수결로 오류 위치를 장부 오류·채널 정산 오류·규칙
+  엔진 오류로 판별하고, 엔진 오류는 채널×할인 칸 단위로 묶어 «고칠 규칙»을 짚습니다. 합성 20개월에서 오류 행 위치
+  판별 97.2%(2-way 는 25.8% — 장부 오류는 아예 못 보고 엔진 오류는 채널 탓으로 돌림), 엔진 오류 칸 20/20개월 적중.
+  장부와 엔진이 같은 낡은 계약 마스터를 읽으면 다수결이 틀린다(해당 행 97.4% 채널 탓)는 한계도 재현해 두고,
+  그 경우에도 칸 단위 군집으로는 20/20개월 잡힌다는 점을 함께 측정했습니다.
 - **벤치마크 결함 자체 발견·수정** — 초기 버전은 노이즈를 평가 대상인 허용오차에 종속시켜 생성해, 어떤 임계값을
   써도 정밀도가 오르는 구조였습니다. 이를 실측으로 확인해 절대범위 노이즈로 교체했고, 그 경위와 수치 변화를
   README에 그대로 남겼습니다.

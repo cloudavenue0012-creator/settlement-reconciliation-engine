@@ -29,3 +29,12 @@ jobs:
 
       - name: Explanation faithfulness (catches hallucinated figures)
         run: python explain.py --demo-hallucination
+
+      - name: Rule-change gate - three named scenarios give the expected verdicts
+        run: python rule_change_gate.py
+
+      - name: Rule-change gate - eval (side-effect detection >= 0.90, false alarms 0)
+        run: python eval_rule_change.py --min-detect 0.90 --max-false-alarm 0.0
+
+      - name: Three-way reconciliation - eval (location accuracy >= 0.96, false alarm <= 1%, engine cell found)
+        run: python eval_three_way.py --min-location-acc 0.96 --max-false-alarm 0.01 --min-cell-id 1.0
